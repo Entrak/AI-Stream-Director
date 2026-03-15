@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Stream Director</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="card">
+      <h1>AI Stream Director</h1>
+      <p class="subtitle">Producer-style guidance for pre-stream, live stream, and post-stream.</p>
+      <div class="button-row">
+        <button id="stagePreBtn" class="secondary active">Pre-stream</button>
+        <button id="stageDuringBtn" class="secondary">During stream</button>
+        <button id="stagePostBtn" class="secondary">Post-stream</button>
+      </div>
+    </header>
+
+    <section class="row">
+      <section class="card grow">
+        <h2>Stage Controls</h2>
+        <div class="button-row">
+          <button id="startStageBtn">Start Stage</button>
+          <button id="stopStageBtn" class="secondary">Stop Stage</button>
+          <span id="stagePill" class="status-pill safe">pre-stream</span>
+        </div>
+      </section>
+      <section class="card grow">
+        <h2>System Status</h2>
+        <div class="button-row compact">
+          <button id="aiSelfTestBtn" class="secondary">Run AI Self-Test</button>
+        </div>
+        <div class="status-grid">
+          <div><span>Microphone:</span> <strong id="micStatus">unknown</strong></div>
+          <div><span>Camera:</span> <strong id="cameraStatus">unknown</strong></div>
+          <div><span>Speech API:</span> <strong id="speechApiStatus">checking...</strong></div>
+          <div><span>Chat:</span> <strong id="chatStatus">disconnected</strong></div>
+          <div><span>AI Status:</span> <strong id="aiStatus">checking...</strong></div>
+          <div><span>AI Provider:</span> <strong id="aiProviderStatus">unknown</strong></div>
+        </div>
+      </section>
+    </section>
+
+    <section id="preStreamPanel" class="card stage-panel">
+      <h2>Pre-stream</h2>
+      <div class="panel-grid">
+        <div>
+          <h3>Last Stream Summary</h3>
+          <textarea id="lastSummaryInput" rows="6" placeholder="No previous summary found."></textarea>
+          <div class="button-row compact">
+            <button id="loadSummaryBtn" class="secondary">Reload Stored Summary</button>
+          </div>
+        </div>
+        <div>
+          <h3>Pep Talk</h3>
+          <div id="pepTalkOutput" class="output">Click “Generate Pep Talk” to get focused guidance.</div>
+          <div class="button-row compact">
+            <button id="generatePepTalkBtn">Generate Pep Talk</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-grid">
+        <div>
+          <h3>Stream Plan</h3>
+          <textarea id="planInput" rows="5" placeholder="Describe your planned stream content..."></textarea>
+          <div class="button-row compact">
+            <button id="generatePlanBtn">Generate Plan Suggestions</button>
+          </div>
+        </div>
+        <div>
+          <h3>Plan Suggestions</h3>
+          <div id="planOutput" class="output">Suggestions will appear here.</div>
+        </div>
+      </div>
+
+      <div>
+        <h3>Setup Checks</h3>
+        <div class="button-row compact">
+          <button id="runSetupChecksBtn" class="secondary">Run Mic/Camera Checks</button>
+        </div>
+        <div id="setupCheckOutput" class="output">Run checks before going live.</div>
+      </div>
+    </section>
+
+    <section id="duringStreamPanel" class="card stage-panel hidden">
+      <h2>During stream</h2>
+      <div class="button-row">
+        <button id="startListeningBtn">Start Listening</button>
+        <button id="stopListeningBtn" class="secondary">Stop Listening</button>
+        <button id="connectChatBtn" class="secondary">Connect Twitch Chat</button>
+        <button id="manualRaidBtn" class="secondary">Manual Raid Trigger</button>
+      </div>
+
+      <div class="panel-grid">
+        <div>
+          <h3>Live Transcript</h3>
+          <div id="transcriptOutput" class="output scroll">No transcript yet.</div>
+        </div>
+        <div>
+          <h3>Speech Feedback</h3>
+          <div id="speechFeedbackOutput" class="output">Feedback appears every ~30s while listening.</div>
+        </div>
+      </div>
+
+      <div class="panel-grid">
+        <div>
+          <h3>Twitch Config</h3>
+          <label>
+            Username
+            <input id="twitchUsernameInput" type="text" placeholder="bot_username" />
+          </label>
+          <label>
+            OAuth Token
+            <input id="twitchTokenInput" type="password" placeholder="oauth:xxxxxxxx" />
+          </label>
+          <label>
+            Channel
+            <input id="twitchChannelInput" type="text" placeholder="channel_name" />
+          </label>
+        </div>
+        <div>
+          <h3>Raid Checklist + Timer</h3>
+          <div id="raidChecklistOutput" class="output">No raid detected.</div>
+          <div id="raidTimer" class="timer">00:00</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="postStreamPanel" class="card stage-panel hidden">
+      <h2>Post-stream</h2>
+      <div class="button-row">
+        <button id="endStreamBtn">End Stream & Generate Summary</button>
+      </div>
+      <div class="panel-grid">
+        <div>
+          <h3>Session Data</h3>
+          <div id="sessionDataOutput" class="output scroll">Session metrics will appear after ending stream.</div>
+        </div>
+        <div>
+          <h3>Post-stream Coaching Summary</h3>
+          <div id="postSummaryOutput" class="output">No summary generated yet.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Producer Feed</h2>
+      <div id="producerFeed" class="feed"></div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/tmi.js@1.8.5/dist/tmi.min.js"></script>
+  <script type="module" src="./script.js"></script>
+</body>
+</html>

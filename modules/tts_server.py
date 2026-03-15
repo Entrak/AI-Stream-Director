@@ -4,6 +4,7 @@ TTS Server module - Flask server for TTS audio delivery and OBS dock control API
 
 import json
 import logging
+import re
 import time
 import threading
 import uuid
@@ -12,12 +13,15 @@ from pathlib import Path
 from typing import Optional, Dict, List, Callable, Any
 
 import pyttsx3
-from flask import Flask, render_template_string, jsonify, send_file, request, Response
+from flask import Flask, render_template_string, jsonify, send_file, request, Response, send_from_directory
 from flask_cors import CORS
 
 from config.config import get_config, AppConfig
+from modules.llm_provider import LLMRequest, get_global_registry
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+STATIC_ROOT = PROJECT_ROOT / "static"
 
 
 PLAYER_HTML = """
@@ -194,7 +198,7 @@ class TTSServer:
     def _setup_routes(self) -> None:
         @self.app.route('/')
         def index():
-            return '<h1>AI Producer TTS Server</h1><p>Open <a href="/obs_dock.html">/obs_dock.html</a></p>'
+            return '<h1>AI Producer TTS Server</h1><p>Open <a href="/obs_dock.html">/obs_dock.html</a> or <a href="/stream-director">/stream-director</a></p>'
 
         @self.app.route('/player.html')
         def player():
@@ -206,10 +210,262 @@ class TTSServer:
 
         @self.app.route('/obs_dock.html')
         def obs_dock():
-            static_path = Path("static") / "obs_dock.html"
+            static_path = STATIC_ROOT / "obs_dock.html"
             if static_path.exists():
                 return send_file(static_path)
             return "OBS dock UI not found. Expected static/obs_dock.html", 404
+
+        @self.app.route('/stream-director')
+        @self.app.route('/stream-director/')
+        def stream_director_index():
+            static_path = STATIC_ROOT / "stream-director" / "index.html"
+            if static_path.exists():
+                return send_file(static_path)
+            return "Stream Director UI not found. Expected static/stream-director/index.html", 404
+
+        @self.app.route('/stream-director/<path:filename>')
+        def stream_director_assets(filename):
+            static_dir = STATIC_ROOT / "stream-director"
+            file_path = static_dir / filename
+            if not file_path.exists() or not file_path.is_file():
+                return "Asset not found", 404
+            return send_from_directory(static_dir.resolve(), filename)
+
+        @self.app.route('/api/ai/pep-talk', methods=['POST'])
+        def ai_pep_talk():
+            payload = request.get_json(silent=True) or {}
+            last_summary = str(payload.get('lastSummary', '')).strip()
+
+            if not last_summary:
+                return jsonify({
+                    'ok': True,
+                    'data': {'text': 'No previous summary found yet. Focus on clear speech, pacing, and confident delivery today.'},
+                    'meta': {'fallback': True, 'reason': 'no-summary'},
+                })
+
+            prompt = (
+                "Based on this last stream summary, provide a concise pep talk for the next stream. "
+                "Return 4-6 short bullet points covering what to improve, what to avoid, and what to focus on.\n\n"
+                f"Last stream summary:\n{last_summary}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt=(
+                    "You are an encouraging but direct talk-show producer coach for a streamer. "
+                    "Be practical and actionable."
+                ),
+                max_tokens=220,
+            )
+
+            if not result['ok']:
+                return jsonify({
+                    'ok': True,
+                    'data': {'text': 'Focus today: speak clearly, cut filler words, keep energy steady, and actively involve chat every few minutes.'},
+                    'meta': {'fallback': True, 'reason': result['error']},
+                })
+
+            return jsonify({'ok': True, 'data': {'text': result['text']}, 'meta': result['meta']})
+
+        @self.app.route('/api/ai/pre-stream-plan', methods=['POST'])
+        def ai_pre_stream_plan():
+            payload = request.get_json(silent=True) or {}
+            plan_text = str(payload.get('planText', '')).strip()
+
+            if not plan_text:
+                return jsonify({'ok': True, 'data': {'text': 'Add a rough plan first: opener, core segment, chat interaction points, and a clear close.'}, 'meta': {'fallback': True, 'reason': 'no-plan'}})
+
+            prompt = (
+                "Turn this stream plan into practical producer notes. "
+                "Provide 5 bullet points: opener hook, pacing checkpoints, chat prompts, risk to avoid, and closing beat.\n\n"
+                f"User plan:\n{plan_text}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt="You are a concise stream producer. Keep output short and stage-ready.",
+                max_tokens=220,
+            )
+
+            if not result['ok']:
+                fallback = (
+                    "1) Start with a one-sentence hook.\n"
+                    "2) Split content into 2-3 short segments.\n"
+                    "3) Trigger chat interaction every 10 minutes.\n"
+                    "4) Avoid long silent transitions.\n"
+                    "5) End with a clear recap and next-stream teaser."
+                )
+                return jsonify({'ok': True, 'data': {'text': fallback}, 'meta': {'fallback': True, 'reason': result['error']}})
+
+            return jsonify({'ok': True, 'data': {'text': result['text']}, 'meta': result['meta']})
+
+        @self.app.route('/api/ai/during-analysis', methods=['POST'])
+        def ai_during_analysis():
+            payload = request.get_json(silent=True) or {}
+            transcript = str(payload.get('transcript', '')).strip()
+            metrics = payload.get('metrics', {}) if isinstance(payload.get('metrics', {}), dict) else {}
+
+            if len(transcript) < 20:
+                return jsonify({'ok': True, 'data': {'text': 'Need more speech before analysis. Keep narrating your actions clearly.'}, 'meta': {'fallback': True, 'reason': 'short-transcript'}})
+
+            transcript_excerpt = transcript[-2500:]
+            prompt = (
+                "Analyze this recent stream transcript window and provide producer feedback in 1-3 short sentences. "
+                "Focus on clarity, pacing, filler words, and engagement prompts.\n\n"
+                f"Recent transcript:\n{transcript_excerpt}\n\n"
+                f"Metrics:\n{json.dumps(metrics, ensure_ascii=False)}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt="You are a live producer giving immediate, concise guidance.",
+                max_tokens=140,
+            )
+
+            if not result['ok']:
+                return jsonify({'ok': True, 'data': {'text': 'Producer note: reduce filler words, keep mic distance steady, and narrate your next action.'}, 'meta': {'fallback': True, 'reason': result['error']}})
+
+            return jsonify({'ok': True, 'data': {'text': result['text']}, 'meta': result['meta']})
+
+        @self.app.route('/api/ai/sensitive-topic-check', methods=['POST'])
+        def ai_sensitive_topic_check():
+            payload = request.get_json(silent=True) or {}
+            message = str(payload.get('message', '')).strip()
+            username = str(payload.get('username', 'viewer')).strip() or 'viewer'
+
+            if not message:
+                return jsonify({'ok': True, 'data': {'sensitive': False, 'suggestion': ''}, 'meta': {'fallback': True, 'reason': 'empty-message'}})
+
+            keyword_hit = self._contains_sensitive_keywords(message)
+
+            prompt = (
+                "Classify whether this chat message is emotionally sensitive/trauma-heavy and needs a safe-topic redirect. "
+                "Return strict JSON with keys: sensitive (boolean), suggestion (string under 30 words).\n\n"
+                f"Username: {username}\n"
+                f"Message: {message}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt="You are a stream safety assistant. Prioritize boundaries and safe redirection.",
+                max_tokens=120,
+                temperature=0.2,
+            )
+
+            if result['ok']:
+                parsed = self._parse_json_block(result['text'])
+                if isinstance(parsed, dict) and 'sensitive' in parsed:
+                    sensitive = bool(parsed.get('sensitive'))
+                    suggestion = str(parsed.get('suggestion', '')).strip()
+                    return jsonify({'ok': True, 'data': {'sensitive': sensitive, 'suggestion': suggestion}, 'meta': result['meta']})
+
+            if keyword_hit:
+                suggestion = (
+                    f"{username} asked a sensitive question. Acknowledge briefly, set boundaries, and redirect to a lighter topic. "
+                    "You are not a therapist."
+                )
+                return jsonify({'ok': True, 'data': {'sensitive': True, 'suggestion': suggestion}, 'meta': {'fallback': True, 'reason': 'keyword-heuristic'}})
+
+            return jsonify({'ok': True, 'data': {'sensitive': False, 'suggestion': ''}, 'meta': {'fallback': True, 'reason': result.get('error', 'not-sensitive')}})
+
+        @self.app.route('/api/ai/raid-welcome', methods=['POST'])
+        def ai_raid_welcome():
+            payload = request.get_json(silent=True) or {}
+            stream_name = str(payload.get('streamName', 'My Stream')).strip() or 'My Stream'
+            streamer_type = str(payload.get('streamerType', 'Variety')).strip() or 'Variety'
+            current_game = str(payload.get('currentGame', 'Current Game')).strip() or 'Current Game'
+            viewers = int(payload.get('viewers', 0) or 0)
+            raider = str(payload.get('raider', 'unknown')).strip() or 'unknown'
+
+            prompt = (
+                "Generate exactly 4 concise bullet points for a raid welcome. "
+                "Mention thanks, stream identity, what is happening now, and a chat invitation."
+                " Return strict JSON with key bullets as an array of 4 strings.\n\n"
+                f"stream_name={stream_name}\nstreamer_type={streamer_type}\ncurrent_game={current_game}\n"
+                f"viewers={viewers}\nraider={raider}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt="You are a live show producer. Keep bullets short, warm, and actionable.",
+                max_tokens=180,
+            )
+
+            if result['ok']:
+                parsed = self._parse_json_block(result['text'])
+                if isinstance(parsed, dict) and isinstance(parsed.get('bullets'), list):
+                    bullets = [str(item).strip() for item in parsed['bullets'] if str(item).strip()]
+                    if bullets:
+                        return jsonify({'ok': True, 'data': {'bullets': bullets[:5]}, 'meta': result['meta']})
+
+            fallback_bullets = [
+                f"Welcome raiders and thank {raider} for bringing {viewers} viewers.",
+                f"Quick intro: this is {stream_name}, a {streamer_type} stream.",
+                f"Recap what is happening now: we are currently on {current_game}.",
+                "Invite new viewers to say hi and ask what content they enjoy.",
+            ]
+            return jsonify({'ok': True, 'data': {'bullets': fallback_bullets}, 'meta': {'fallback': True, 'reason': result.get('error', 'parse-failure')}})
+
+        @self.app.route('/api/ai/post-summary', methods=['POST'])
+        def ai_post_summary():
+            payload = request.get_json(silent=True) or {}
+
+            transcript = str(payload.get('transcript', '')).strip()
+            speech_metrics = payload.get('speechMetrics', {}) if isinstance(payload.get('speechMetrics', {}), dict) else {}
+            chat_events = payload.get('chatEvents', []) if isinstance(payload.get('chatEvents', []), list) else []
+            setup_checks = payload.get('setupChecks', {}) if isinstance(payload.get('setupChecks', {}), dict) else {}
+
+            transcript_excerpt = transcript[-3000:]
+            chat_sample = chat_events[-20:]
+
+            prompt = (
+                "Create a post-stream coaching summary in 3 parts: WHAT WENT WELL, WHAT TO IMPROVE, NEXT STREAM FOCUS. "
+                "Be direct, constructive, and concise (under 220 words).\n\n"
+                f"Transcript excerpt:\n{transcript_excerpt}\n\n"
+                f"Speech metrics:\n{json.dumps(speech_metrics, ensure_ascii=False)}\n\n"
+                f"Chat events sample:\n{json.dumps(chat_sample, ensure_ascii=False)}\n\n"
+                f"Setup checks:\n{json.dumps(setup_checks, ensure_ascii=False)}"
+            )
+
+            result = self._generate_ai_text(
+                prompt=prompt,
+                system_prompt="You are an experienced stream coach and producer.",
+                max_tokens=300,
+            )
+
+            if not result['ok']:
+                fallback = (
+                    "WHAT WENT WELL: You completed the stream and kept moving through content.\n\n"
+                    "WHAT TO IMPROVE: Reduce filler words, narrate decisions more often, and keep chat touchpoints consistent.\n\n"
+                    "NEXT STREAM FOCUS: Practice one clarity habit (slow pace + clear enunciation) and one engagement habit (scheduled chat prompts)."
+                )
+                return jsonify({'ok': True, 'data': {'text': fallback}, 'meta': {'fallback': True, 'reason': result['error']}})
+
+            return jsonify({'ok': True, 'data': {'text': result['text']}, 'meta': result['meta']})
+
+        @self.app.route('/api/ai/status', methods=['GET'])
+        def ai_status():
+            registry = get_global_registry()
+            providers = registry.list_providers()
+            available_provider = registry.get_available_provider()
+
+            provider_name = None
+            provider_type = None
+            if available_provider:
+                provider_name = available_provider.name
+                provider_type = available_provider.provider_type.value
+
+            return jsonify({
+                'ok': True,
+                'data': {
+                    'ai_live': available_provider is not None,
+                    'fallback_mode': available_provider is None,
+                    'active_provider_name': provider_name,
+                    'active_provider_type': provider_type,
+                    'providers': providers,
+                    'fallback_chain': list(registry.fallback_chain),
+                },
+            })
 
         @self.app.route('/api/control', methods=['GET'])
         def control_status():
@@ -423,6 +679,104 @@ class TTSServer:
                 'temp_dir': str(self.temp_dir),
                 'audio_files': len(list(self.temp_dir.glob('*.mp3'))),
             })
+
+    def _generate_ai_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 200,
+        temperature: float = 0.4,
+    ) -> Dict[str, Any]:
+        registry = get_global_registry()
+        provider = registry.get_available_provider()
+
+        if not provider:
+            return {'ok': False, 'error': 'no-available-provider', 'text': '', 'meta': {}}
+
+        request_payload = LLMRequest(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.9,
+            timeout_sec=20.0,
+        )
+
+        response = provider.generate(request_payload)
+
+        if response.error:
+            logger.warning(f"AI endpoint generation failed ({provider.name}): {response.error}")
+            return {
+                'ok': False,
+                'error': response.error,
+                'text': '',
+                'meta': {'provider': provider.name, 'model': response.model},
+            }
+
+        return {
+            'ok': True,
+            'error': None,
+            'text': (response.text or '').strip(),
+            'meta': {
+                'provider': response.provider,
+                'model': response.model,
+                'latency_sec': response.latency_sec,
+                'finish_reason': response.finish_reason,
+                'tokens_used': response.tokens_used or {},
+            },
+        }
+
+    @staticmethod
+    def _parse_json_block(text: str) -> Optional[Any]:
+        if not text:
+            return None
+
+        cleaned = text.strip()
+
+        if cleaned.startswith('```'):
+            cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r'\s*```$', '', cleaned)
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        object_match = re.search(r'\{[\s\S]*\}', cleaned)
+        if object_match:
+            try:
+                return json.loads(object_match.group(0))
+            except json.JSONDecodeError:
+                return None
+
+        array_match = re.search(r'\[[\s\S]*\]', cleaned)
+        if array_match:
+            try:
+                return json.loads(array_match.group(0))
+            except json.JSONDecodeError:
+                return None
+
+        return None
+
+    @staticmethod
+    def _contains_sensitive_keywords(message: str) -> bool:
+        lowered = (message or '').lower()
+        sensitive_terms = [
+            'suicide',
+            'self-harm',
+            'abuse',
+            'assault',
+            'depressed',
+            'depression',
+            'trauma',
+            'panic attack',
+            'ptsd',
+            'kill myself',
+            'hurt myself',
+            'grief',
+            'overdose',
+        ]
+        return any(term in lowered for term in sensitive_terms)
 
     def _fallback_status(self) -> Dict[str, Any]:
         return {
