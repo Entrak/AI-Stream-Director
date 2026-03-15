@@ -1,0 +1,15 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-8.3.4, pluggy-1.6.0 -- E:\Development\Streamer AI Producer\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Development\Streamer AI Producer
+configfile: pytest.ini
+plugins: anyio-3.7.1, asyncio-0.24.0, cov-6.0.0, timeout-2.3.1
+asyncio: mode=Mode.AUTO, default_loop_scope=function
+timeout: 5.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 1 item
+
+tests/unit/test_event_bus.py::TestPriorityEventBus::test_graceful_shutdown_with_drain PASSED [100%]
+
+============================== 1 passed in 0.34s ==============================

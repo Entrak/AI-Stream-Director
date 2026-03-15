@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Producer OBS Dock</title>
+  <style>
+    body { margin:0; padding:12px; background:#1e1e1e; color:#e8e8e8; font-family:Arial,sans-serif; }
+    .card { background:#2a2a2a; border:1px solid #3a3a3a; border-radius:8px; padding:10px; margin-bottom:10px; }
+    .title { font-size:13px; font-weight:bold; color:#bdbdbd; margin-bottom:6px; }
+    .value { font-size:18px; font-weight:bold; }
+    .row { display:flex; gap:8px; }
+    .row .card { flex:1; }
+    .status-pill { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:bold; }
+    .safe { background:#1d5f32; color:#d9ffe6; }
+    .degraded { background:#6a571d; color:#fff3cd; }
+    .minimal { background:#6b3f1d; color:#ffe3d0; }
+    .unsafe { background:#6b1d1d; color:#ffd7d7; }
+    .button-row { display:flex; gap:8px; flex-wrap:wrap; }
+    .button-row button { flex:1; min-width:120px; }
+    button { border:none; border-radius:8px; padding:10px; font-weight:bold; cursor:pointer; background:#2f7be6; color:white; }
+    button.paused { background:#7a7a7a; }
+    button.secondary { background:#3a3a3a; }
+    .toggles { display:flex; gap:14px; margin-top:8px; font-size:12px; flex-wrap:wrap; }
+    .pill { font-size:11px; background:#454545; border-radius:999px; padding:2px 8px; margin-left:6px; }
+    .list { display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto; }
+    .list-item { border:1px solid #3b3b3b; border-radius:6px; padding:7px; background:#242424; }
+    .item-meta { font-size:11px; color:#a8a8a8; margin-top:4px; }
+    .item-actions { margin-top:6px; }
+    .item-actions button { font-size:11px; padding:5px 8px; }
+    #meta { font-size:12px; color:#a0a0a0; }
+    #safetyBanner { font-size:12px; border-left:3px solid #c7972f; padding:6px 8px; background:#332b17; border-radius:4px; margin-bottom:10px; }
+    .conn-badge { display:inline-block; border-radius:999px; padding:3px 10px; font-size:11px; font-weight:bold; }
+    .conn-connected { background:#1d5f32; color:#d9ffe6; }
+    .conn-disconnected { background:#6b1d1d; color:#ffd7d7; }
+    .conn-disabled { background:#4a4a4a; color:#dedede; }
+    #connError { margin-top:6px; font-size:11px; color:#ffcf9e; }
+    .guardrail { font-size:12px; background:#2e1f3a; border-left:3px solid #b57ce5; padding:6px 8px; border-radius:4px; margin-top:8px; }
+    .select-row { margin-top:8px; display:flex; align-items:center; gap:8px; font-size:12px; }
+    .select-row select { background:#202020; color:#eee; border:1px solid #555; border-radius:6px; padding:4px 6px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">Guidance Control</div>
+    <div class="button-row">
+      <button id="pauseBtn">Loading...</button>
+      <button id="manualBtn" class="secondary">Manual Tip</button>
+      <button id="manualExtensiveBtn" class="secondary">Extensive</button>
+    </div>
+    <div class="select-row">
+      <label for="focusGoal">Focus goal:</label>
+      <select id="focusGoal">
+        <option value="general">General</option>
+        <option value="engagement">Engagement</option>
+        <option value="pacing">Pacing</option>
+        <option value="energy">Energy</option>
+        <option value="technical">Technical</option>
+        <option value="goals">Goals</option>
+      </select>
+    </div>
+    <div class="toggles">
+      <label><input type="checkbox" id="inEarToggle"> In-ear Lane</label>
+      <label><input type="checkbox" id="teleToggle"> Teleprompter Lane</label>
+      <label><input type="checkbox" id="sceneExtensiveToggle"> Scene Extensive</label>
+    </div>
+    <div id="guardrailBanner" class="guardrail" style="display:none;"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">OBS Websocket</div>
+    <div class="button-row">
+      <div id="connBadge" class="conn-badge conn-disabled">disabled</div>
+      <button id="reconnectBtn" class="secondary">Reconnect OBS</button>
+    </div>
+    <div id="connError"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">Scene Debug</div>
+    <div id="sceneDebug" class="item-meta">No scene data yet.</div>
+  </div>
+
+  <div id="safetyBanner">Safety status loading...</div>
+
+  <div class="row">
+    <div class="card">
+      <div class="title">Safety</div>
+      <div id="safetyLevel" class="status-pill">unknown</div>
+    </div>
+    <div class="card">
+      <div class="title">Event Drop Rate<span class="pill" id="sceneMode">normal</span></div>
+      <div id="dropRate" class="value">0.0%</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <div class="title">Chat Messages <span class="pill" id="coolInEar">in-ear 0s</span></div>
+      <div id="chatTotal" class="value">0</div>
+    </div>
+    <div class="card">
+      <div class="title">Voice Chunks <span class="pill" id="coolTele">tele 0s</span></div>
+      <div id="voiceChunks" class="value">0</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">Last Guidance</div>
+    <div id="lastGuidanceText">No guidance delivered yet.</div>
+    <div id="lastGuidanceMeta" style="margin-top:6px; font-size:12px; color:#a0a0a0;"></div>
+    <div class="item-actions"><button id="pinLastBtn" class="secondary">⭐ Pin Last Guidance</button></div>
+  </div>
+
+  <div class="card">
+    <div class="title">Pinned Guidance</div>
+    <div id="pinnedList" class="list"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">Recent Guidance (Last 5)</div>
+    <div id="recentList" class="list"></div>
+  </div>
+
+  <div class="card">
+    <div class="title">Session Setup</div>
+    <div class="button-row">
+      <button id="sessionKickoffBtn" class="secondary">Start Session Setup</button>
+      <button id="sessionStatusBtn" class="secondary">Session Status</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">Training Mode</div>
+    <div style="font-size:12px; margin-bottom:10px;">
+      <p style="margin:0 0 8px 0;">📚 Passive Training: Listen to entire stream, analyze at end for detailed feedback.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="trainingToggleBtn" class="secondary" style="flex:1; min-width:120px;">Enable Training Mode</button>
+        <button id="endSessionBtn" class="secondary" style="flex:1; min-width:120px;">End & Analyze Session</button>
+      </div>
+      <div id="trainingStatus" style="font-size:11px; color:#999; margin-top:8px; text-align:center;">Guidance mode active</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">Scene Assignment</div>
+    <div id="sceneAssignmentUI" style="font-size:12px; margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; gap:6px; margin-bottom:8px;">
+        <input type="text" id="sceneNameInput" placeholder="Scene name (e.g., 'My Starting')" style="flex:1; background:#202020; color:#eee; border:1px solid #555; border-radius:6px; padding:6px;">
+        <select id="sceneModeSelect" style="background:#202020; color:#eee; border:1px solid #555; border-radius:6px; padding:6px;">
+          <option value="normal">Normal</option>
+          <option value="starting">Starting</option>
+          <option value="brb">Break</option>
+        </select>
+        <button id="assignSceneBtn" class="secondary" style="min-width:80px;">Assign</button>
+      </div>
+      <div id="sceneAssignmentList" style="max-height:150px; overflow-y:auto; padding:6px; background:#202020; border-radius:6px; border:1px solid #333;">
+        <div style="color:#666; font-size:11px;">No scenes assigned yet</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">Session Export</div>
+    <div class="button-row">
+      <button id="exportJsonBtn" class="secondary">Export JSON</button>
+      <button id="exportMdBtn" class="secondary">Export Markdown</button>
+    </div>
+  </div>
+
+  <!-- Session Kickoff Modal -->
+  <div id="sessionKickoffModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:1000; overflow-y:auto;">
+    <div style="background:#2a2a2a; color:#e8e8e8; border-radius:8px; max-width:600px; margin:40px auto; padding:20px; border:1px solid #3a3a3a;">
+      <div style="font-size:18px; font-weight:bold; margin-bottom:20px;">Stream Setup Sequence</div>
+      
+      <div id="kickoffContent" style="margin-bottom:20px; max-height:400px; overflow-y:auto;">
+        <div id="greetingSection" style="margin-bottom:16px; padding:12px; background:#1a1a1a; border-left:3px solid #2f7be6; border-radius:4px;">
+          <div style="font-weight:bold; margin-bottom:8px;">👋 Greeting</div>
+          <div id="greetingText" style="font-size:14px; line-height:1.4;"></div>
+        </div>
+
+        <div id="goalsSection" style="margin-bottom:16px; padding:12px; background:#1a1a1a; border-left:3px solid #6ca5ce; border-radius:4px; display:none;">
+          <div style="font-weight:bold; margin-bottom:8px;">🎯 Stream Goals</div>
+          <div style="font-size:13px; margin-bottom:10px;">What are your goals for this stream?</div>
+          <textarea id="goalsInput" placeholder="e.g., Hit viewer milestone, practice technique, finish tutorial..." style="width:100%; height:80px; background:#303030; color:#eee; border:1px solid #555; border-radius:4px; padding:8px; box-sizing:border-box; font-family:Arial,sans-serif;"></textarea>
+        </div>
+
+        <div id="pepTalkSection" style="margin-bottom:16px; padding:12px; background:#1a1a1a; border-left:3px solid #2ebf7e; border-radius:4px;">
+          <div style="font-weight:bold; margin-bottom:8px;">🚀 Pep Talk</div>
+          <div id="pepTalkText" style="font-size:14px; line-height:1.4;"></div>
+        </div>
+
+        <div id="helpText" style="font-size:12px; color:#999; text-align:center; margin-top:20px;">
+          Loading setup sequence...
+        </div>
+      </div>
+
+      <div class="button-row" style="gap:8px;">
+        <label style="flex:1; display:flex; align-items:center; padding:8px; background:#2a2a2a; border:1px solid #3a3a3a; border-radius:4px; cursor:pointer; font-size:13px;">
+          <input type="checkbox" id="repeatGoalsCheckbox" style="margin-right:8px; cursor:pointer;">
+          Repeat goals from last stream
+        </label>
+      </div>
+
+      <div class="button-row" style="margin-top:12px;">
+        <button id="kickoffStartBtn" style="flex:1; background:#2f7be6;">Start Stream</button>
+        <button id="kickoffCancelBtn" class="secondary" style="flex:1;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="meta">Connecting...</div>
+
+  <script>
+    const pauseBtn = document.getElementById('pauseBtn');
+    const safetyLevel = document.getElementById('safetyLevel');
+    const dropRate = document.getElementById('dropRate');
+    const chatTotal = document.getElementById('chatTotal');
+    const voiceChunks = document.getElementById('voiceChunks');
+    const coolInEar = document.getElementById('coolInEar');
+    const coolTele = document.getElementById('coolTele');
+    const sceneMode = document.getElementById('sceneMode');
+    const sceneDebug = document.getElementById('sceneDebug');
+    const safetyBanner = document.getElementById('safetyBanner');
+    const connBadge = document.getElementById('connBadge');
+    const connError = document.getElementById('connError');
+    const reconnectBtn = document.getElementById('reconnectBtn');
+    const inEarToggle = document.getElementById('inEarToggle');
+    const teleToggle = document.getElementById('teleToggle');
+    const sceneExtensiveToggle = document.getElementById('sceneExtensiveToggle');
+    const manualBtn = document.getElementById('manualBtn');
+    const manualExtensiveBtn = document.getElementById('manualExtensiveBtn');
+    const focusGoalSelect = document.getElementById('focusGoal');
+    const guardrailBanner = document.getElementById('guardrailBanner');
+    const pinLastBtn = document.getElementById('pinLastBtn');
+    const recentList = document.getElementById('recentList');
+    const pinnedList = document.getElementById('pinnedList');
+    const lastGuidanceText = document.getElementById('lastGuidanceText');
+    const lastGuidanceMeta = document.getElementById('lastGuidanceMeta');
+    const exportJsonBtn = document.getElementById('exportJsonBtn');
+    const exportMdBtn = document.getElementById('exportMdBtn');
+    const sessionKickoffBtn = document.getElementById('sessionKickoffBtn');
+    const sessionStatusBtn = document.getElementById('sessionStatusBtn');
+    const sessionKickoffModal = document.getElementById('sessionKickoffModal');
+    const kickoffCancelBtn = document.getElementById('kickoffCancelBtn');
+    const kickoffStartBtn = document.getElementById('kickoffStartBtn');
+    const repeatGoalsCheckbox = document.getElementById('repeatGoalsCheckbox');
+    const goalsInput = document.getElementById('goalsInput');
+    const sceneNameInput = document.getElementById('sceneNameInput');
+    const sceneModeSelect = document.getElementById('sceneModeSelect');
+    const assignSceneBtn = document.getElementById('assignSceneBtn');
+    const sceneAssignmentList = document.getElementById('sceneAssignmentList');
+    const trainingToggleBtn = document.getElementById('trainingToggleBtn');
+    const endSessionBtn = document.getElementById('endSessionBtn');
+    const trainingStatus = document.getElementById('trainingStatus');
+    const meta = document.getElementById('meta');
+
+    let paused = false;
+    let latestGuidanceId = null;
+    let sceneToModeMapping = {};
+    let trainingModeActive = false;
+
+    function setMeta(text) { meta.textContent = text; }
+    function renderPauseButton() {
+      if (paused) { pauseBtn.textContent = 'Resume Guidance'; pauseBtn.classList.add('paused'); }
+      else { pauseBtn.textContent = 'Pause Guidance'; pauseBtn.classList.remove('paused'); }
+    }
+    function renderSafety(level) {
+      safetyLevel.className = 'status-pill ' + (level || 'unsafe');
+      safetyLevel.textContent = (level || 'unknown').toUpperCase();
+    }
+    function renderConnection(status, errorText) {
+      connBadge.className = 'conn-badge';
+      if (status === 'connected') connBadge.classList.add('conn-connected');
+      else if (status === 'disconnected') connBadge.classList.add('conn-disconnected');
+      else connBadge.classList.add('conn-disabled');
+      connBadge.textContent = status || 'disabled';
+      connError.textContent = errorText || '';
+    }
+    function renderGuardrail(pending) {
+      if (!pending || !pending.active) {
+        guardrailBanner.style.display = 'none';
+        guardrailBanner.textContent = '';
+        return;
+      }
+      const remaining = Math.max(0, Math.ceil((pending.due_at || 0) - Date.now() / 1000));
+      guardrailBanner.style.display = 'block';
+      guardrailBanner.innerHTML = `Auto ${pending.mode} coaching in ${remaining}s <button id="cancelGuardrailBtn" class="secondary" style="margin-left:8px; padding:4px 8px;">Cancel</button>`;
+      const cancelBtn = document.getElementById('cancelGuardrailBtn');
+      if (cancelBtn) cancelBtn.addEventListener('click', cancelGuardrail);
+    }
+    function renderLastGuidance(guidance) {
+      if (!guidance || !guidance.text) { latestGuidanceId = null; lastGuidanceText.textContent = 'No guidance delivered yet.'; lastGuidanceMeta.textContent = ''; return; }
+      latestGuidanceId = guidance.id || null;
+      lastGuidanceText.textContent = guidance.text;
+      const parts = [];
+      if (guidance.priority) parts.push(guidance.priority.toUpperCase());
+      if (guidance.provider) parts.push(guidance.provider);
+      if (guidance.reason) parts.push(guidance.reason);
+      if (guidance.created_at) parts.push(new Date(guidance.created_at * 1000).toLocaleTimeString());
+      lastGuidanceMeta.textContent = parts.join(' • ');
+    }
+    function createGuidanceItem(item, canPin) {
+      const wrapper = document.createElement('div'); wrapper.className = 'list-item';
+      const text = document.createElement('div'); text.textContent = item.text || '(empty)';
+      const metaEl = document.createElement('div'); metaEl.className = 'item-meta';
+      const parts = [];
+      if (item.priority) parts.push(item.priority.toUpperCase());
+      if (item.provider) parts.push(item.provider);
+      if (item.reason) parts.push(item.reason);
+      if (item.created_at) parts.push(new Date(item.created_at * 1000).toLocaleTimeString());
+      metaEl.textContent = parts.join(' • ');
+      wrapper.appendChild(text); wrapper.appendChild(metaEl);
+      if (item.id) {
+        const action = document.createElement('div'); action.className = 'item-actions';
+        const button = document.createElement('button'); button.className = 'secondary';
+        button.textContent = canPin ? '⭐ Pin' : 'Unpin';
+        button.addEventListener('click', async () => {
+          await fetch(canPin ? '/api/control/pin' : '/api/control/unpin', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guidance_id: item.id })
+          });
+          await refreshStatus();
+        });
+        action.appendChild(button); wrapper.appendChild(action);
+      }
+      return wrapper;
+    }
+    function renderGuidanceLists(recent, pinned) {
+      recentList.innerHTML = ''; pinnedList.innerHTML = '';
+      if (!pinned || pinned.length === 0) {
+        const empty = document.createElement('div'); empty.className = 'item-meta'; empty.textContent = 'No pinned guidance yet.'; pinnedList.appendChild(empty);
+      } else pinned.forEach(item => pinnedList.appendChild(createGuidanceItem(item, false)));
+      if (!recent || recent.length === 0) {
+        const empty = document.createElement('div'); empty.className = 'item-meta'; empty.textContent = 'No guidance history yet.'; recentList.appendChild(empty);
+      } else recent.forEach(item => recentList.appendChild(createGuidanceItem(item, true)));
+    }
+
+    function renderSceneAssignmentList() {
+      sceneAssignmentList.innerHTML = '';
+      const entries = Object.entries(sceneToModeMapping);
+      if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.color = '#666';
+        empty.style.fontSize = '11px';
+        empty.textContent = 'No scenes assigned yet';
+        sceneAssignmentList.appendChild(empty);
+        return;
+      }
+      entries.forEach(([scene, mode]) => {
+        const item = document.createElement('div');
+        item.style.display = 'flex';
+        item.style.justifyContent = 'space-between';
+        item.style.alignItems = 'center';
+        item.style.padding = '6px';
+        item.style.background = '#252525';
+        item.style.borderRadius = '4px';
+        item.style.marginBottom = '4px';
+        item.textContent = `"${scene}" → ${mode}`;
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'secondary';
+        removeBtn.style.padding = '3px 8px';
+        removeBtn.style.fontSize = '11px';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', async () => {
+          delete sceneToModeMapping[scene];
+          renderSceneAssignmentList();
+        });
+        item.appendChild(removeBtn);
+        sceneAssignmentList.appendChild(item);
+      });
+    }
+
+    async function refreshStatus() {
+      try {
+        const resp = await fetch('/api/control', { cache: 'no-store' });
+        const data = await resp.json();
+        paused = !!data.guidance_paused;
+        renderPauseButton();
+        renderSafety(data.safety_level);
+        renderConnection(data.scene_connection_status, data.scene_connection_error);
+        renderGuardrail(data.pending_scene_guardrail);
+
+        inEarToggle.checked = !!data.lane_in_ear_enabled;
+        teleToggle.checked = !!data.lane_teleprompter_enabled;
+        sceneExtensiveToggle.checked = !!data.scene_extensive_feedback_enabled;
+
+        sceneMode.textContent = data.scene_mode || 'normal';
+        sceneDebug.textContent = `Scene: ${data.scene_name || '(none)'} | Match: ${data.scene_match_pattern || '(none)'} | Auto: ${data.scene_auto_coaching_active ? 'on' : 'off'}`;
+        safetyBanner.textContent = data.safety_banner || 'Safety status unavailable';
+
+        dropRate.textContent = `${((data.event_drop_rate || 0) * 100).toFixed(1)}%`;
+        chatTotal.textContent = `${data.chat_total_messages || 0}`;
+        voiceChunks.textContent = `${data.voice_total_chunks || 0}`;
+        coolInEar.textContent = `in-ear ${Math.ceil((data.cooldowns?.in_ear_remaining || 0))}s`;
+        coolTele.textContent = `tele ${Math.ceil((data.cooldowns?.teleprompter_remaining || 0))}s`;
+        renderLastGuidance(data.last_guidance);
+        renderGuidanceLists(data.recent_guidance || [], data.pinned_guidance || []);
+
+        // Fetch training mode status
+        try {
+          const trainingResp = await fetch('/api/training/status', { cache: 'no-store' });
+          const trainingData = await trainingResp.json();
+          trainingModeActive = trainingData.training_mode || false;
+          updateTrainingModeDisplay();
+        } catch (e) {
+          // Training endpoint not available, update display with current state
+          updateTrainingModeDisplay();
+        }
+
+        setMeta(`Updated ${new Date().toLocaleTimeString()}`);
+      } catch (e) {
+        setMeta(`Status error: ${e.message}`);
+      }
+    }
+
+    async function togglePause() {
+      await fetch('/api/control/pause', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: !paused })
+      });
+      await refreshStatus();
+    }
+
+    async function updateLanes() {
+      await fetch('/api/control/lanes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          in_ear_enabled: inEarToggle.checked,
+          teleprompter_enabled: teleToggle.checked,
+          scene_extensive_enabled: sceneExtensiveToggle.checked,
+        })
+      });
+      await refreshStatus();
+    }
+
+    async function triggerManual(mode, intent) {
+      await fetch('/api/control/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, intent, focus_goal: focusGoalSelect.value })
+      });
+      await refreshStatus();
+    }
+
+    async function reconnectObs() {
+      await fetch('/api/control/reconnect_obs', { method: 'POST' });
+      await refreshStatus();
+    }
+
+    async function cancelGuardrail() {
+      await fetch('/api/control/cancel_scene_guardrail', { method: 'POST' });
+      await refreshStatus();
+    }
+
+    async function pinLastGuidance() {
+      if (!latestGuidanceId) { setMeta('No latest guidance to pin'); return; }
+      await fetch('/api/control/pin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guidance_id: latestGuidanceId })
+      });
+      await refreshStatus();
+    }
+
+    function downloadUrl(url, filename) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    async function triggerSessionKickoff() {
+      sessionKickoffModal.style.display = 'block';
+      document.getElementById('greetingText').textContent = 'Loading...';
+      document.getElementById('pepTalkText').textContent = 'Loading...';
+      document.getElementById('goalsSection').style.display = 'none';
+      document.getElementById('helpText').textContent = 'Loading greeting and pep talk...';
+
+      try {
+        const resp = await fetch('/api/session/kickoff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repeat_goals: repeatGoalsCheckbox.checked })
+        });
+        const data = await resp.json();
+        
+        // Extract the generated guidance for display
+        document.getElementById('greetingText').textContent = 'Starting your stream setup... The AI is preparing personalized coaching.';
+        document.getElementById('pepTalkText').textContent = 'Personalized guidance will be delivered through your TTS system.';
+        
+        if (!repeatGoalsCheckbox.checked) {
+          document.getElementById('goalsSection').style.display = 'block';
+        } else {
+          document.getElementById('goalsSection').style.display = 'none';
+        }
+        
+        document.getElementById('helpText').textContent = 'Ready to start? Press "Start Stream" below.';
+      } catch (e) {
+        document.getElementById('helpText').textContent = `Error: ${e.message}`;
+      }
+    }
+
+    async function closeKickoffModal() {
+      sessionKickoffModal.style.display = 'none';
+    }
+
+    async function startStream() {
+      if (!repeatGoalsCheckbox.checked && goalsInput.value.trim()) {
+        await fetch('/api/session/set_goals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ goals: goalsInput.value.trim() })
+        });
+      }
+
+      // Apply scene assignments
+      for (const [scene, mode] of Object.entries(sceneToModeMapping)) {
+        await fetch('/api/session/assign_scene', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scene_name: scene, mode })
+        });
+      }
+
+      closeKickoffModal();
+      await refreshStatus();
+    }
+
+    async function getSessionStatus() {
+      try {
+        const resp = await fetch('/api/session/status');
+        const data = await resp.json();
+        if (data.session_result && data.session_result.ok) {
+          const info = data.session_result;
+          alert(`Session: ${info.session_id}\nDuration: ${Math.floor(info.duration_seconds)}s\nViewers: ${info.viewers_count}\nGoals: ${info.goals || '(not set)'}`);
+        } else {
+          alert('Session data unavailable');
+        }
+      } catch (e) {
+        alert(`Error: ${e.message}`);
+      }
+    }
+
+    async function assignScene() {
+      const scene = sceneNameInput.value.trim();
+      const mode = sceneModeSelect.value;
+      if (!scene) { alert('Enter a scene name'); return; }
+      
+      sceneToModeMapping[scene] = mode;
+      renderSceneAssignmentList();
+      sceneNameInput.value = '';
+      sceneModeSelect.value = 'normal';
+    }
+
+    async function toggleTrainingMode() {
+      try {
+        const resp = await fetch('/api/training/toggle', { method: 'POST' });
+        const data = await resp.json();
+        if (data.training_result && data.training_result.ok) {
+          trainingModeActive = data.training_result.training_mode;
+          updateTrainingModeDisplay();
+          await refreshStatus();
+        } else {
+          alert('Failed to toggle training mode');
+        }
+      } catch (e) {
+        alert(`Error: ${e.message}`);
+      }
+    }
+
+    async function endSession() {
+      if (!confirm('End stream analysis? This will generate a detailed report.')) return;
+      
+      let notes = '';
+      const userInput = prompt('Any notes about this stream? (optional)', '');
+      if (userInput !== null) {
+        notes = userInput;
+      }
+
+      try {
+        const resp = await fetch('/api/training/end_session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes })
+        });
+        const data = await resp.json();
+        if (data.end_session_result && data.end_session_result.ok) {
+          const analysis = data.end_session_result.analysis;
+          alert(`📊 Analysis Complete!\n\nDuration: ${analysis.duration_minutes?.toFixed(1)}m\nInsights: ${analysis.insights?.length || 0}\n\n${data.end_session_result.training_focus}`);
+          await refreshStatus();
+        } else {
+          alert('Failed to analyze session: ' + (data.end_session_result?.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert(`Error: ${e.message}`);
+      }
+    }
+
+    function updateTrainingModeDisplay() {
+      if (trainingModeActive) {
+        trainingToggleBtn.textContent = 'Disable Training Mode';
+        trainingToggleBtn.style.background = '#c27d85';
+        trainingStatus.textContent = '🎓 Training Mode: Collecting data, guidance paused';
+        trainingStatus.style.color = '#8fbf80';
+      } else {
+        trainingToggleBtn.textContent = 'Enable Training Mode';
+        trainingToggleBtn.style.background = '#3a3a3a';
+        trainingStatus.textContent = '💬 Guidance mode active';
+        trainingStatus.style.color = '#999';
+      }
+    }
+
+    pauseBtn.addEventListener('click', togglePause);
+    inEarToggle.addEventListener('change', updateLanes);
+    teleToggle.addEventListener('change', updateLanes);
+    sceneExtensiveToggle.addEventListener('change', updateLanes);
+    manualBtn.addEventListener('click', () => triggerManual('normal', 'manual_tip'));
+    manualExtensiveBtn.addEventListener('click', () => triggerManual('extensive', 'manual_extensive'));
+    reconnectBtn.addEventListener('click', reconnectObs);
+    pinLastBtn.addEventListener('click', pinLastGuidance);
+    exportJsonBtn.addEventListener('click', () => downloadUrl('/api/export/session?format=json', 'session_recap.json'));
+    exportMdBtn.addEventListener('click', () => downloadUrl('/api/export/session?format=md', 'session_recap.md'));
+    sessionKickoffBtn.addEventListener('click', triggerSessionKickoff);
+    sessionStatusBtn.addEventListener('click', getSessionStatus);
+    kickoffCancelBtn.addEventListener('click', closeKickoffModal);
+    kickoffStartBtn.addEventListener('click', startStream);
+    assignSceneBtn.addEventListener('click', assignScene);
+    trainingToggleBtn.addEventListener('click', toggleTrainingMode);
+    endSessionBtn.addEventListener('click', endSession);
+    sceneNameInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') assignScene(); });
+
+    refreshStatus();
+    setInterval(refreshStatus, 1500);
+  </script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+# Twitch AI Stream Producer - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Web server
+flask==3.0.0
+flask-cors==4.0.0
+
+# AI & ML
+ollama==0.1.6
+
+# Speech-to-Text (requires CuBLAS and cuDNN for GPU acceleration)
+# 1.2.1 includes Python 3.12-compatible dependency wheels (av>=11)
+faster-whisper==1.2.1
+pyaudio==0.2.14
+
+# Screen capture & OCR
+mss==9.0.1
+pytesseract==0.3.10
+opencv-python==4.9.0.80
+Pillow==10.2.0
+
+# Audio analysis
+librosa==0.10.1
+soundfile==0.12.1
+
+# Text-to-Speech
+pyttsx3==2.90
+
+# System monitoring & resource management (Phase 1 features)
+psutil==5.9.8
+
+# Cloud LLM providers (optional, graceful fallback if not available)
+openai==1.3.0
+
+# GPU monitoring (optional, graceful fallback if GPU unavailable)
+nvidia-ml-py==12.535.108
+
+# OBS websocket integration (optional)
+obsws-python==1.7.0
+
+# Utilities
+numpy==1.26.3
+python-dotenv==1.0.0
+
+# Note: Additional system dependencies required:
+# - Tesseract OCR binary (https://github.com/UB-Mannheim/tesseract/wiki)
+# - Ollama with Qwen3:8B model (https://ollama.com/)
+# - CUDA Toolkit 12.x + CuBLAS + cuDNN for faster-whisper GPU acceleration
+# - Virtual Audio Cable (VB-Audio) for mic routing
+# - NVIDIA drivers for GPU monitoring (pynvml, nvidia-ml-py)
